@@ -293,6 +293,11 @@ ninfer_add_op_test(ninfer_linear_topk_test
   SOURCES ops/test_linear_topk.cu
   LIBRARIES ninfer_ops)
 
+# Pure-CPU cooperative-residency boundary test (no CUDA device required).
+ninfer_add_test(ninfer_gdn_gating_residency_test
+  SOURCES ops/test_gdn_gating_residency.cpp
+  LIBRARIES ninfer_ops)
+
 # Stateful, fused, and exact-shape Ops remain central even when the current implementation domain
 # is one checkpoint/device.
 ninfer_add_op_test(ninfer_gqa_attention_test

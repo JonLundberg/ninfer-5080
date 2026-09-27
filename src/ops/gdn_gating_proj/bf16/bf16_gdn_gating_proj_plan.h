@@ -49,6 +49,14 @@ struct Bf16GdnNormGatingPlan {
 
 const char* bf16_gdn_gating_schedule_name(Bf16GdnGatingScheduleId schedule) noexcept;
 
+// Cooperative-launch residency gates, expressed in the device's SM count so they are testable
+// without a CUDA context. A zero SM count yields a zero resident-CTA budget, rejecting every
+// cooperative schedule so the planner falls back to a non-cooperative route.
+bool bf16_gdn_gating_27_resident(Bf16GdnGatingScheduleId schedule, std::int32_t cols,
+                                 std::int32_t sm_count) noexcept;
+bool bf16_gdn_gating_35_resident(Bf16GdnGatingScheduleId schedule, std::int32_t cols,
+                                 std::int32_t sm_count) noexcept;
+
 bool bf16_gdn_gating_admits(const Bf16GdnGatingProblem& problem) noexcept;
 Bf16GdnGatingPlan bf16_gdn_gating_resolve_plan(const Bf16GdnGatingProblem& problem);
 Bf16GdnGatingPlan bf16_gdn_gating_resolve_candidate(Bf16GdnGatingScheduleId schedule,
