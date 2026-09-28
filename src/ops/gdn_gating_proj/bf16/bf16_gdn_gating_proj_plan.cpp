@@ -8,6 +8,30 @@
 #include <stdexcept>
 
 namespace ninfer::ops::detail {
+
+static std::int32_t schedule_split_k(Bf16GdnGatingScheduleId schedule) {
+    switch (schedule) {
+    case Bf16GdnGatingScheduleId::SmallTSplit10:
+        return 10;
+    case Bf16GdnGatingScheduleId::MmaCooperativeSplit32:
+        return 32;
+    case Bf16GdnGatingScheduleId::MmaCooperativeSplit16:
+        return 16;
+    case Bf16GdnGatingScheduleId::MmaCooperativeSplit8:
+        return 8;
+    case Bf16GdnGatingScheduleId::MmaCooperativeSplit4:
+        return 4;
+    case Bf16GdnGatingScheduleId::MmaCooperativeSplit2:
+        return 2;
+    case Bf16GdnGatingScheduleId::GemvPairedRows:
+    case Bf16GdnGatingScheduleId::SimtWarpRowC4:
+    case Bf16GdnGatingScheduleId::SimtWarpRowC8:
+    case Bf16GdnGatingScheduleId::MmaUnsplit:
+        return 1;
+    }
+    throw std::logic_error("BF16 GDN gating: unknown schedule");
+}
+
 namespace {
 
 inline constexpr std::int32_t kAnyCols = std::numeric_limits<std::int32_t>::max();
@@ -95,85 +119,36 @@ std::int32_t mma_tile_cols(const Bf16GdnGatingProblem& problem) noexcept {
     return (is_35(problem) || is_9(problem)) ? 64 : 128;
 }
 
-std::int32_t schedule_split_k(Bf16GdnGatingScheduleId schedule) {
-    switch (schedule) {
-    case Bf16GdnGatingScheduleId::SmallTSplit10:
-        return 10;
-    case Bf16GdnGatingScheduleId::MmaCooperativeSplit32:
-        return 32;
-    case Bf16GdnGatingScheduleId::MmaCooperativeSplit16:
-        return 16;
-    case Bf16GdnGatingScheduleId::MmaCooperativeSplit8:
-        return 8;
-    case Bf16GdnGatingScheduleId::MmaCooperativeSplit4:
-        return 4;
-    case Bf16GdnGatingScheduleId::MmaCooperativeSplit2:
-        return 2;
-    case Bf16GdnGatingScheduleId::GemvPairedRows:
-    case Bf16GdnGatingScheduleId::SimtWarpRowC4:
-    case Bf16GdnGatingScheduleId::SimtWarpRowC8:
-    case Bf16GdnGatingScheduleId::MmaUnsplit:
-        return 1;
-    }
-    throw std::logic_error("BF16 GDN gating: unknown schedule");
-}
-
-bool cooperative_grid_is_resident(Bf16GdnGatingScheduleId schedule, std::int32_t cols,
-                                  std::int32_t tile_cols, std::int32_t row_tiles,
-                                  std::int32_t resident_ctas) noexcept {
-    const std::int64_t column_tiles = (static_cast<std::int64_t>(cols) + tile_cols - 1) / tile_cols;
-    const std::int64_t grid_ctas =
-        column_tiles * row_tiles * static_cast<std::int64_t>(schedule_split_k(schedule));
-    return grid_ctas <= resident_ctas;
-}
-
-// Runtime residency check that uses the actual device SM count instead of hardcoded RTX 5090 values.
-// Split32 admits 2 CTAs/SM; all other cooperative schedules admit 4 CTAs/SM.
-static bool runtime_cooperative_grid_is_resident(Bf16GdnGatingScheduleId schedule,
-                                                 std::int32_t cols, std::int32_t tile_cols,
-                                                 std::int32_t row_tiles, int sm_count) noexcept {
-    const std::int64_t column_tiles =
-        (static_cast<std::int64_t>(cols) + tile_cols - 1) / tile_cols;
-    const std::int64_t grid_ctas =
-        column_tiles * row_tiles * static_cast<std::int64_t>(schedule_split_k(schedule));
-    const std::int32_t max_ctas =
-        schedule == Bf16GdnGatingScheduleId::MmaCooperativeSplit32 ? sm_count * 2 : sm_count * 4;
-    return grid_ctas <= max_ctas;
-}
-
+// SM count of the active CUDA device, cached per (thread, device). Returns 0 when the active
+// device cannot be determined; the zero budget then rejects every cooperative schedule.
 static int device_sm_count() noexcept {
-    static int cached = -1;
-    if (cached < 0) {
-        cudaDeviceProp prop;
-        if (cudaGetDeviceProperties(&prop, 0) == cudaSuccess) {
-            cached = prop.multiProcessorCount;
-        } else {
-            cached = 170; // fallback to RTX 5090 value
-        }
+    struct Cache {
+        int device = -1;
+        int sm_count = 0;
+    };
+    static thread_local Cache cache;
+
+    int device = -1;
+    if (cudaGetDevice(&device) != cudaSuccess) {
+        return 0;
     }
-    return cached;
+    if (cache.device != device) {
+        cudaDeviceProp prop{};
+        if (cudaGetDeviceProperties(&prop, device) != cudaSuccess) {
+            return 0;
+        }
+        cache.device = device;
+        cache.sm_count = prop.multiProcessorCount;
+    }
+    return cache.sm_count;
 }
 
 bool cooperative_27_grid_is_resident(Bf16GdnGatingScheduleId schedule, std::int32_t cols) noexcept {
-    // BN128 uses 40 KiB of dynamic shared memory. Split8 uses 71 registers with 256 threads;
-    // split4/2 use 62 registers with 512 threads. Each specialization admits two CTAs/SM, hence
-    // 340 resident CTAs device-wide on RTX 5090. There are three 16-row tiles per token tile.
-    // Use runtime SM count for cross-GPU correctness.
-    int sm = device_sm_count();
-    const std::int32_t resident_ctas = sm * 2; // Split8 admits 2 CTAs/SM
-    return cooperative_grid_is_resident(schedule, cols, 128, 3, resident_ctas);
+    return bf16_gdn_gating_27_resident(schedule, cols, device_sm_count());
 }
 
 bool cooperative_35_grid_is_resident(Bf16GdnGatingScheduleId schedule, std::int32_t cols) noexcept {
-    // BN64 uses 24 KiB of dynamic shared memory and two 16-row tiles. With the registered CUDA
-    // 13.1/sm_120a build, split32 uses 91/93 registers per thread and admits two CTAs/SM;
-    // split16/8/4/2 use at most 62 registers and admit four CTAs/SM. Across 170 SMs the
-    // device-wide limits are 340 and 680 CTAs respectively.
-    // Use runtime SM count for cross-GPU correctness.
-    int sm = device_sm_count();
-    const std::int32_t resident_ctas =
-        schedule == Bf16GdnGatingScheduleId::MmaCooperativeSplit32 ? sm * 2 : sm * 4;
-    return cooperative_grid_is_resident(schedule, cols, 64, 2, resident_ctas);
+    return bf16_gdn_gating_35_resident(schedule, cols, device_sm_count());
 }
 
 bool candidate_is_legal(Bf16GdnGatingScheduleId schedule,
@@ -365,6 +340,31 @@ std::size_t route_capacity(const std::array<RouteSpec, N>& routes, const Bf16Gdn
 
 } // namespace
 
+// Cooperative-launch residency gates, expressed in the device's SM count so they can be tested
+// without a CUDA context. A zero SM count yields a zero resident-CTA budget, so every
+// cooperative schedule is rejected and the planner falls back to a non-cooperative route.
+bool bf16_gdn_gating_27_resident(Bf16GdnGatingScheduleId schedule, std::int32_t cols,
+                                 std::int32_t sm_count) noexcept {
+    // BN128 uses 40 KiB of dynamic shared memory, so every cooperative specialization admits
+    // two CTAs/SM. There are three 16-row tiles per 128-column token tile.
+    const std::int64_t column_tiles = (static_cast<std::int64_t>(cols) + 127) / 128;
+    const std::int64_t grid_ctas =
+        column_tiles * 3 * static_cast<std::int64_t>(schedule_split_k(schedule));
+    return grid_ctas <= static_cast<std::int64_t>(sm_count) * 2;
+}
+
+bool bf16_gdn_gating_35_resident(Bf16GdnGatingScheduleId schedule, std::int32_t cols,
+                                 std::int32_t sm_count) noexcept {
+    // BN64 uses 24 KiB of dynamic shared memory and two 16-row tiles per 64-column token tile.
+    // Split32 admits two CTAs/SM; the other splits admit four CTAs/SM.
+    const std::int64_t column_tiles = (static_cast<std::int64_t>(cols) + 63) / 64;
+    const std::int64_t grid_ctas =
+        column_tiles * 2 * static_cast<std::int64_t>(schedule_split_k(schedule));
+    const std::int64_t ctas_per_sm =
+        schedule == Bf16GdnGatingScheduleId::MmaCooperativeSplit32 ? 2 : 4;
+    return grid_ctas <= static_cast<std::int64_t>(sm_count) * ctas_per_sm;
+}
+
 const char* bf16_gdn_gating_schedule_name(Bf16GdnGatingScheduleId schedule) noexcept {
     switch (schedule) {
     case Bf16GdnGatingScheduleId::GemvPairedRows:
@@ -504,7 +504,8 @@ Bf16GdnNormGatingPlan bf16_gdn_norm_gating_resolve_plan(const Bf16GdnGatingProbl
     Bf16GdnGatingPlan control            = bf16_gdn_gating_resolve_plan(problem);
     Bf16GdnNormGatingScheduleId schedule = Bf16GdnNormGatingScheduleId::Composed;
     std::int32_t norm_splits             = 0;
-    if (is_35(problem) && problem.cols <= 16) {
+    if (is_35(problem) && problem.cols <= 16 &&
+        candidate_is_legal(Bf16GdnGatingScheduleId::MmaCooperativeSplit32, problem)) {
         control  = bf16_gdn_gating_resolve_candidate(Bf16GdnGatingScheduleId::MmaCooperativeSplit32,
                                                      problem);
         schedule = Bf16GdnNormGatingScheduleId::MmaCooperativeSplit32;
