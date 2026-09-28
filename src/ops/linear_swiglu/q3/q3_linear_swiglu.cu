@@ -1571,11 +1571,12 @@ __global__ void q3_linear_swiglu_kernel(
 // E101: Q3 weight / group-64 A8 large-prefill fused SwiGLU.
 //
 // Decode and small-T kernels are intentionally untouched.
-// Initial schedule is inherited from the measured RTX 4090 INT8 route;
-// Blackwell-specific retuning comes only after correctness/performance gating.
+// RTX 5080 / CC 12.0 schedule qualified under CUDA 13.4.92 / R615.
+// The narrower column tile removes CUDA 13.4 compiler spill traffic on the
+// large-prefill Full=false path while retaining the 256-thread launch shape.
 // -----------------------------------------------------------------------------
 using Q3Int8FoldedCfg =
-    Q3Int8SwiGluSchedule<64, 256, 16, 128, 3, 1>;
+    Q3Int8SwiGluSchedule<64, 128, 16, 64, 3, 1>;
 
 template <class Cfg, bool Full>
 void q3_launch_folded_int8(
