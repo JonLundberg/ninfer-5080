@@ -6,7 +6,8 @@ Start with the [project README](../README.md) for the validated RTX 5080 profile
 
 | Document | Purpose |
 |---|---|
-| [Qwen3.8-27B RTX 5080 v1.4 release](RELEASE_QWEN3.8_27B_RTX5080_V1.4.md) | current production release: host-mapped embeddings, CUDA Graph, realistic 118K benchmark and Vision-2048 headroom |
+| [Qwen3.8-27B RTX 5080 v1.5 release](RELEASE_QWEN3.8_27B_RTX5080_V1.5.md) | current production release: CUDA 13.4/R615, Blackwell Q3/A8 retune, canonical ninfer_bench corpus and chunk 1792 |
+| [Qwen3.8-27B RTX 5080 v1.4 release](RELEASE_QWEN3.8_27B_RTX5080_V1.4.md) | historical production release: host-mapped embeddings, CUDA Graph, realistic 118K benchmark and Vision-2048 headroom |
 | [Qwen3.8-27B RTX 5080 v1.3 release](RELEASE_QWEN3.8_27B_RTX5080_V1.3.md) | historical v1.3 production runtime, thinking-budget and rolling-tool checkpoint behavior |
 | [Validated manifest](VALIDATED_MANIFEST.md) | immutable model/binary identities and commit-scoped qualification records |
 | [True 128K + Vision on RTX 5080](VISION_128K.md) | current v1.4 Vision-2048 production profile plus historical 1792/2048 memory validation |
