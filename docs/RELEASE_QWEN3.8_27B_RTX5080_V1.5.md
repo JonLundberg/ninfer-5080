@@ -1,8 +1,23 @@
 # Qwen3.8-27B RTX 5080 128K + Vision v1.5
 
-## Release summary
+v1.5 is the current production-qualified RTX 5080 runtime for Qwen3.8-27B. It moves the project to **CUDA 13.4.92 / NVIDIA 615.71.09**, retunes the Q3/A8 large-prefill SwiGLU path for Blackwell/CC 12.0, and standardizes release performance reporting on `ninfer_bench`.
 
-v1.5 moves the validated RTX 5080 production runtime to the CUDA 13.4 / R615 baseline and retunes the Q3/A8 large-prefill SwiGLU schedule for Blackwell/CC 12.0.
+## Headline result
+
+Canonical `pp118001+tg2048` benchmark on a single RTX 5080 16 GB:
+
+| Metric | v1.5 |
+|---|---:|
+| Prefill | **1,374.383 tok/s** |
+| Sustained decode | **112.215 tok/s** |
+| Improvement | **+4.46% prefill / +2.32% decode** |
+| Context / KV capacity | **131,072 / 131,072** |
+| KV dtype | **Q4 group64** |
+| Prefill chunk | **1792** |
+| Speculation | **MTP-3** |
+| CUDA Graph | **enabled** |
+| Host-mapped embeddings | **enabled** |
+| Vision profile | **2048 tokens** |
 
 The model artifact is unchanged:
 
@@ -10,24 +25,11 @@ The model artifact is unchanged:
 MODEL_SHA256=c4a7e9ab593a7f42d58208fa0065d67a82d61921107686cc9f6ed1ec6b050e21
 ```
 
-Qualification platform:
-
-```text
-GPU=NVIDIA GeForce RTX 5080 16 GB
-CUDA=13.4.92
-DRIVER=615.71.09
-MAX_CONTEXT=131072
-KV_CAPACITY=131072
-KV_DTYPE=q4-group64
-MTP=3
-CUDA_GRAPH=ON
-EMBEDDING_HOST=ON
-VISION_PROFILE=2048
-```
+Full benchmark methodology, run-level results, memory measurements and compiler evidence are in [BENCHMARKS.md](BENCHMARKS.md).
 
 ## Canonical benchmark contract
 
-From this release onward, `ninfer_bench` is the source of truth for whole-model performance.
+`ninfer_bench` is the source of truth for whole-model release performance.
 
 ```text
 fixture=bench/fixtures/workflow-118k-v1/ninfer_bench_118001.ids
@@ -44,45 +46,23 @@ cuda_graph=on
 embedding_host=on
 ```
 
-The benchmark itself disables model-default stops so all measured runs include the exact requested sustained decode length. Q4 benchmark support is part of the retained `ninfer_bench` interface.
-
-## Final old-vs-new performance gate
-
-The old production configuration and Schedule A were compared on the exact same immutable token-ID corpus and benchmark contract.
-
-| Metric | Old production | v1.5 | Change |
-|---|---:|---:|---:|
-| Prefill chunk | 896 | **1792** | — |
-| Prefill, 2-run mean | 1,315.712 tok/s | **1,374.383 tok/s** | **+4.459%** |
-| Sustained decode, 2-run mean | 109.666 tok/s | **112.215 tok/s** | **+2.324%** |
-| Decode fallbacks | 0 | **0** | unchanged |
-| Workspace | 115.999 MiB | **231.998 MiB** | +115.999 MiB |
-| Planned slack | ~843.17 MiB | **~727.23 MiB** | -115.94 MiB |
-
-Result:
-
-```text
-PERFORMANCE_GATE=PASS
-RELEASE_DECISION=PUBLISH_SCHEDULE_A
-```
+Other context sweeps, microbenchmarks, Nsight captures and serving probes remain diagnostic tools rather than competing release benchmarks.
 
 ## Blackwell Q3/A8 retune
 
-Previous large-prefill schedule:
+The large-prefill schedule is retuned from:
 
 ```cpp
 Q3Int8SwiGluSchedule<64, 256, 16, 128, 3, 1>
 ```
 
-v1.5 schedule:
+to:
 
 ```cpp
 Q3Int8SwiGluSchedule<64, 128, 16, 64, 3, 1>
 ```
 
-CUDA 13.4 changed code generation for the previous Full=false large-prefill path and introduced local-memory spill traffic. Structural qualification showed the old CUDA 13.4 kernel at 255 registers with stack/local spill traffic, while Schedule A compiled at approximately 204–206 registers with zero stack/local allocation and no LDL/STL spill instructions.
-
-Decode and small-T kernels are intentionally unchanged by this schedule retune.
+The change removes the CUDA 13.4 spill behavior observed in the previous large-prefill route. Decode and small-T kernels are unchanged.
 
 ## Recommended production profile
 
@@ -109,22 +89,29 @@ Decode and small-T kernels are intentionally unchanged by this schedule retune.
 
 CUDA Graph remains enabled by default.
 
-## Benchmark policy
+## Production validation
 
-Whole-model release performance claims use the canonical `ninfer_bench` contract above. Additional context-size sweeps, kernel microbenchmarks, Nsight profiling and serving measurements are diagnostic and should be run only to answer a specific engineering question; they do not replace the canonical benchmark.
+Validated on:
 
-## Validation status
+```text
+GPU=NVIDIA GeForce RTX 5080 16 GB
+CUDA=13.4.92
+DRIVER=615.71.09
+SOURCE=e4353f061bf0e378c83472cb2bcaf99e65681f4e
+NINFER_SERVE_SHA256=928e5615ef453786f47f79b6af2152d2f8f8d61307656f23c47fa45b5ed41167
+```
 
-| Validation | Result |
-|---|---|
-| Canonical immutable token-ID corpus | PASS |
-| Q4 `ninfer_bench` support | PASS |
-| CUDA 13.4.92 build | PASS |
-| NVIDIA 615.71.09 driver baseline | PASS |
-| 131,072 context / Q4 KV | PASS |
-| MTP-3 / CUDA Graph | PASS |
-| Old-vs-new canonical performance gate | PASS |
-| No decode fallback regression | PASS |
-| Memory envelope at chunk 1792 | PASS |
-| Final production serving smoke | pending deployment |
+Final Brain deployment passed:
 
+- service enabled and active;
+- `/v1/models` HTTP 200;
+- text generation smoke returned `OK`;
+- full 131,072 Q4 KV capacity;
+- MTP-3;
+- CUDA Graph enabled;
+- host-mapped embeddings;
+- Vision 2048;
+- **885.94 MiB free after startup**;
+- **806.92 MiB planned slack**.
+
+**V1.5 PRODUCTION RELEASE VALIDATED.**
