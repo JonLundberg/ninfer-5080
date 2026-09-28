@@ -45,6 +45,33 @@ The same artifact SHA has been retained across the original text-only release, V
 
 ## Validated runtime releases
 
+### v1.5 CUDA 13.4 / Blackwell production runtime
+
+v1.5 qualifies the RTX 5080 production path on **CUDA 13.4.92 / NVIDIA 615.71.09** and retunes the large-prefill Q3/A8 SwiGLU schedule for Blackwell/CC 12.0.
+
+The canonical performance source of truth is now `ninfer_bench` using the committed immutable 118,001-token ID fixture:
+
+```text
+bench/fixtures/workflow-118k-v1/ninfer_bench_118001.ids
+SHA256=5b08da2c7b7ea5cafad2fab5699dccbcbce86040d8a37219b8c21f094d1d1eb7
+test=pp118001+tg2048
+warmup=1
+measured repetitions=2
+```
+
+Against the old production configuration on the exact same corpus and benchmark contract:
+
+| Metric | v1.4-style baseline | v1.5 | Change |
+|---|---:|---:|---:|
+| Prefill | 1,315.712 tok/s | **1,374.383 tok/s** | **+4.459%** |
+| Sustained decode | 109.666 tok/s | **112.215 tok/s** | **+2.324%** |
+| Prefill chunk | 896 | **1792** | — |
+| Q3 large-prefill schedule | 64/256/16/128 | **64/128/16/64** | — |
+
+The Q3 retune removes the CUDA 13.4 local-memory spill regression observed in the previous large-prefill schedule. The model artifact remains unchanged.
+
+See [the v1.5 release record](docs/RELEASE_QWEN3.8_27B_RTX5080_V1.5.md).
+
 ### v1.4 production runtime
 
 The current production release is **v1.4**, published from:
@@ -85,7 +112,7 @@ Historical release records remain preserved in [v1.3](docs/RELEASE_QWEN3.8_27B_R
 
 ## Recommended serving profile
 
-The v1.4 RTX 5080 production profile uses full 128K context/KV, Vision 2048, host-mapped embeddings, MTP-3 and CUDA Graph decode:
+The v1.5 RTX 5080 production profile uses full 128K context/KV, Vision 2048, host-mapped embeddings, MTP-3 and CUDA Graph decode:
 
 ```bash
 ./build/apps/ninfer-serve /path/to/qwen3_8_27b.ninfer \
@@ -94,7 +121,7 @@ The v1.4 RTX 5080 production profile uses full 128K context/KV, Vision 2048, hos
   --model-id qwen3.8-27b \
   --max-context 131072 \
   --kv-capacity 131072 \
-  --prefill-chunk 896 \
+  --prefill-chunk 1792 \
   --kv-dtype q4 \
   --spec mtp \
   --draft-tokens 3 \
@@ -106,7 +133,7 @@ The v1.4 RTX 5080 production profile uses full 128K context/KV, Vision 2048, hos
   --vision-max-tokens 2048
 ```
 
-CUDA Graph is enabled by default; the recommended v1.4 profile intentionally omits `--no-cuda-graph`.
+CUDA Graph is enabled by default; the recommended v1.5 profile intentionally omits `--no-cuda-graph`.
 
 Validated startup envelope:
 
@@ -203,7 +230,8 @@ That means build automation can evolve without weakening the artifact identity c
 
 Start with:
 
-- [v1.4 release](docs/RELEASE_QWEN3.8_27B_RTX5080_V1.4.md) — current production release record
+- [v1.5 release](docs/RELEASE_QWEN3.8_27B_RTX5080_V1.5.md) — current CUDA 13.4 / Blackwell production release record
+- [v1.4 release](docs/RELEASE_QWEN3.8_27B_RTX5080_V1.4.md) — historical production release record
 - [v1.3 release](docs/RELEASE_QWEN3.8_27B_RTX5080_V1.3.md) — historical production release record
 - [Validated manifest](docs/VALIDATED_MANIFEST.md) — exact source, binary and model identities
 - [Vision 128K](docs/VISION_128K.md) — Vision profiles, memory envelope and validation

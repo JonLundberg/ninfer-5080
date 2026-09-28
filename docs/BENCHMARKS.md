@@ -1,5 +1,62 @@
 # Benchmarks
 
+## Canonical v1.5 RTX 5080 benchmark — `ninfer_bench`
+
+From v1.5 onward, **`ninfer_bench` is the single canonical whole-model performance benchmark**. Op microbenchmarks, Nsight captures, short-context sweeps and serving probes are diagnostic tools only unless a specific investigation requires them.
+
+Immutable corpus:
+
+```text
+fixture: bench/fixtures/workflow-118k-v1/ninfer_bench_118001.ids
+tokens: 118001
+SHA256: 5b08da2c7b7ea5cafad2fab5699dccbcbce86040d8a37219b8c21f094d1d1eb7
+```
+
+Canonical contract:
+
+| Item | Value |
+|---|---:|
+| Tool | `ninfer_bench` |
+| Test | `pp118001+tg2048` |
+| Warmup | 1 |
+| Measured repetitions | 2 |
+| GPU | RTX 5080 16 GB |
+| CUDA | 13.4.92 |
+| NVIDIA driver | 615.71.09 |
+| Max context | 131,072 |
+| KV capacity | 131,072 |
+| KV dtype | Q4 group64 |
+| MTP | 3 |
+| CUDA Graph | enabled |
+| Host-mapped embeddings | enabled |
+
+Final old-vs-new qualification used the same model artifact, corpus, benchmark binary contract and toolchain:
+
+| Metric | Old production schedule / chunk 896 | Schedule A / chunk 1792 | Change |
+|---|---:|---:|---:|
+| Prefill, 2-run mean | 1,315.712 tok/s | **1,374.383 tok/s** | **+4.459%** |
+| Sustained decode, 2-run mean | 109.666 tok/s | **112.215 tok/s** | **+2.324%** |
+| Decode fallbacks | 0 | **0** | unchanged |
+| Workspace | 115.999 MiB | **231.998 MiB** | +115.999 MiB |
+| Planned slack | ~843.17 MiB | **~727.23 MiB** | -115.94 MiB |
+
+The larger prefill workspace is intentional and remains inside the validated RTX 5080 memory envelope. The new configuration retains more than 700 MiB planned slack at full 131,072 Q4 KV capacity.
+
+The Q3/A8 large-prefill schedule changed from:
+
+```text
+Q3Int8SwiGluSchedule<64,256,16,128,3,1>
+```
+
+to:
+
+```text
+Q3Int8SwiGluSchedule<64,128,16,64,3,1>
+```
+
+Under CUDA 13.4 the old large-prefill kernel compiled at 255 registers with stack/local-memory spill traffic. Schedule A compiled at roughly 204–206 registers with zero stack/local allocation and no LDL/STL spill instructions. The whole-model result above is the release performance gate; the compiler-resource evidence explains the mechanism.
+
+
 
 ## Canonical v1.4 RTX 5080 benchmark — `workflow-118k-v1`
 
