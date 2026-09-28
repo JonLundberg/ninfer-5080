@@ -103,6 +103,11 @@ int test_cli_contract() {
     failures += expect(parsed.max_context == std::optional<std::uint32_t>(4096), "max context");
     failures += expect(parsed.prefill_chunk == 128, "prefill chunk");
     failures += expect(parsed.kv_cache == ninfer::KvCacheStorage::Int8Group64, "INT8 KV");
+
+    const qb::BenchOptions q4 = parse_for_test(
+        {"ninfer_bench", "--weights", "model.ninfer", "--kv-dtype", "q4"});
+    failures += expect(q4.kv_cache == ninfer::KvCacheStorage::Int4Group64, "Q4 KV");
+    failures += expect_string(qb::kv_cache_name(q4.kv_cache), "q4-group64", "Q4 KV name");
     failures += expect(parsed.mtp_draft_tokens == 5, "MTP window");
     failures +=
         expect(parsed.proposal_head == ninfer::ProposalHead::Optimized, "optimized proposal head");
@@ -118,6 +123,8 @@ int test_cli_contract() {
                "default pp/tg matrix");
     failures += expect(qb::usage_text("ninfer_bench").find("artifact.ninfer") != std::string::npos,
                        "help names native artifact");
+    failures += expect(qb::usage_text("ninfer_bench").find("bf16|int8|q4") != std::string::npos,
+                       "help lists Q4 KV");
     failures += expect(parse_for_test({"ninfer_bench", "--help"}).help_requested, "help flag");
 
     failures += expect_throws<std::invalid_argument>([] { (void)parse_for_test({"ninfer_bench"}); },
