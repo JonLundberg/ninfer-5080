@@ -1,0 +1,29 @@
+{
+  "artifact_type": "ninfer_bench_corpus",
+  "schema_version": 1,
+  "canonical": true,
+  "purpose": "canonical long-context ninfer_bench performance fixture",
+  "token_count": 118001,
+  "ids_sha256": "5b08da2c7b7ea5cafad2fab5699dccbcbce86040d8a37219b8c21f094d1d1eb7",
+  "source_fixture": "qwen38_118001_workflow_candidate.txt",
+  "source_fixture_sha256": "cb7c131bd20d78bd69396c019f988c81fad1941a853a8de7da7586e1aeb99718",
+  "tokenizer_source": "local_hf",
+  "tokenizer_model_id": "Qwen/Qwen3.8-27B",
+  "tokenizer_revision": "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
+  "tokenizer_json_sha256": "0997f410c57a1f4e53b09e4be8f4a172d90edd9564368fb0847030937229b9f3",
+  "add_special_tokens": false,
+  "chat_template": false,
+  "construction": "raw tokenizer IDs tiled/rotated and truncated to exactly 118001 tokens",
+  "benchmark_contract": {
+    "tool": "ninfer_bench",
+    "test": "pp118001+tg2048",
+    "warmup": 1,
+    "measured_repetitions": 2,
+    "max_context": 131072,
+    "kv_capacity": 131072,
+    "kv_dtype": "q4-group64",
+    "mtp_draft_tokens": 3,
+    "cuda_graph": true,
+    "embedding_host": true
+  }
+}
