@@ -108,7 +108,7 @@ NInfer is a from-scratch C++/CUDA inference engine for maximum single-GPU infere
 a small set of explicitly registered checkpoint artifacts. The supported identities are
 `qwen3.6-27b/groupwise-int`, `qwen3.6-27b/nvfp4`, `qwen3.8-27b/groupwise-int`,
 `qwen3.8-27b/nvfp4`, and `qwen3.6-35b-a3b/groupwise-int`. The current implementation is compiled
-for `sm_120a` and tuned and measured on NVIDIA GeForce RTX 5090. All identities execute Text,
+for `sm_120a` and tuned and measured primarily on NVIDIA GeForce RTX 5080 16 GB. All identities execute Text,
 image/video Vision, MTP, prefix reuse, CLI, OpenAI/Anthropic serving, and measurement through the
 same public `.ninfer` Engine route; the 35B-A3B target additionally supports text-only DFlash.
 
@@ -131,6 +131,48 @@ instance bytes. No mutable state or device allocation is shared between Programs
 is defined as a delta from the other, and there is no runtime family selection or target-dependent
 branch inside family scheduling. All artifacts embed the same six frontend resources, and a
 prepared prompt carries no exact-target tag.
+
+## Performance target and feature-start gate
+
+NInfer is currently optimized aggressively for the production hot path on NVIDIA GeForce RTX 5080
+16 GB, Compute Capability 12.0 (`sm_120a`). The RTX 5080 result is the current performance decision
+criterion.
+
+For every performance-sensitive feature or implementation change, establish before implementation:
+
+- the current hot-path behavior it affects;
+- why that path matters to the RTX 5080 production workload;
+- the bottleneck or metric expected to improve;
+- the relevant CUDA/toolchain assumptions;
+- any CC12.0-native opportunity that could materially improve the path;
+- explicit out-of-scope work; and
+- the evidence required to determine whether the change succeeds.
+
+Use this feature-start declaration explicitly in implementation work:
+
+```text
+CURRENT_HOT_PATH=
+RTX5080_RELEVANCE=
+EXPECTED_BOTTLENECK_OR_METRIC=
+CC12_NATIVE_OPPORTUNITY=
+OUT_OF_SCOPE=
+SUCCESS_CRITERIA=
+```
+
+Optimize aggressively for the current RTX 5080 / CC12.0 hot path. CC12.0-native instructions,
+layouts, schedules, fusions, memory movement, and other architecture-specific techniques are
+encouraged when they improve the supported workload. Do not constrain the hot path merely to
+preserve performance, source compatibility, or implementation compatibility with older GPU
+architectures or older CUDA releases.
+
+Do not spend project effort speculatively tuning RTX 5090, RTX 5070-class, RTX PRO Blackwell, or
+other CC12.0 cards unless real hardware measurements, a contributor issue, or a pull request
+establishes a concrete need. Prefer clean CC12.0-native designs where that does not compromise the
+current hot path, so later hardware evidence can be incorporated without unnecessary redesign.
+
+Performance verification should be targeted. Prefer the smallest experiment that distinguishes the
+live alternatives; do not turn feature work into broad benchmark campaigns unless unresolved
+evidence requires it.
 
 ## Engineering priorities
 
@@ -313,7 +355,7 @@ These are conventional project resources, not a checklist of resources every tas
 | conversion report | `out/qwen3_6_27b.ninfer.conversion.json` |
 | normal build | `build/` |
 | profiler output | `profiles/ncu/`, `profiles/nsys/`, `profiles/bench/` |
-| hardware/toolchain | RTX 5090, `sm_120a`, CUDA 13.1 |
+| hardware/toolchain | RTX 5080 16 GB, `sm_120a`, CUDA 13.4 development baseline |
 
 Use the selected Python 3.11 interpreter explicitly. Do not install or upgrade dependencies unless
 the task requires it. Never select an artifact by glob, modification time, or an unqualified
