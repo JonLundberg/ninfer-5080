@@ -11,6 +11,13 @@ contribution, regardless of whether the code was written by a human or generated
 
 In particular:
 
+- for every performance-sensitive feature, explicitly declare the current hot path, RTX 5080
+  relevance, expected bottleneck or metric, CC12.0-native opportunity, out-of-scope work, and
+  success criteria before implementation;
+- optimize aggressively for the current RTX 5080 16 GB / CC12.0 production hot path;
+- do not spend project effort speculatively tuning other RTX 50-series or RTX PRO Blackwell cards
+  without real hardware evidence, a contributor issue, or a pull request establishing a concrete
+  need;
 - choose the technically strongest coherent solution for the requested outcome;
 - respect the documented architecture and ownership boundaries;
 - do not preserve superseded project-owned compatibility paths, aliases, or fallbacks;
