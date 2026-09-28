@@ -9,7 +9,7 @@
 
 namespace ninfer::ops::detail {
 
-std::int32_t schedule_split_k(Bf16GdnGatingScheduleId schedule) {
+static std::int32_t schedule_split_k(Bf16GdnGatingScheduleId schedule) {
     switch (schedule) {
     case Bf16GdnGatingScheduleId::SmallTSplit10:
         return 10;
@@ -504,7 +504,8 @@ Bf16GdnNormGatingPlan bf16_gdn_norm_gating_resolve_plan(const Bf16GdnGatingProbl
     Bf16GdnGatingPlan control            = bf16_gdn_gating_resolve_plan(problem);
     Bf16GdnNormGatingScheduleId schedule = Bf16GdnNormGatingScheduleId::Composed;
     std::int32_t norm_splits             = 0;
-    if (is_35(problem) && problem.cols <= 16) {
+    if (is_35(problem) && problem.cols <= 16 &&
+        candidate_is_legal(Bf16GdnGatingScheduleId::MmaCooperativeSplit32, problem)) {
         control  = bf16_gdn_gating_resolve_candidate(Bf16GdnGatingScheduleId::MmaCooperativeSplit32,
                                                      problem);
         schedule = Bf16GdnNormGatingScheduleId::MmaCooperativeSplit32;

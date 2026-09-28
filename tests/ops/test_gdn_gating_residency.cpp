@@ -1,5 +1,7 @@
 #include "ops/gdn_gating_proj/bf16/bf16_gdn_gating_proj_plan.h"
 
+#include <cuda_runtime.h>
+
 #include <cstdint>
 #include <iostream>
 #include <string>
@@ -41,6 +43,34 @@ int main() {
     failures += check(
         "35b split32 T=1537 36SM rejects",
         bf16_gdn_gating_35_resident(Bf16GdnGatingScheduleId::MmaCooperativeSplit32, 1537, 36), false);
+
+    // A zero-SM device never admits the 35B cooperative Split32 residency (deterministic).
+    failures += check("35b zero-SM Split32 not resident",
+                      bf16_gdn_gating_35_resident(Bf16GdnGatingScheduleId::MmaCooperativeSplit32, 8, 0),
+                      false);
+
+    // Fused 35B norm-gating with cols <= 16 must fall back to Composed (not throw) when the
+    // cooperative Split32 candidate is unavailable. On a host with no CUDA device,
+    // device_sm_count() is 0, which is exactly that condition; the already-resolved Composed
+    // control plan is retained instead of resolving the non-resident Split32 candidate.
+    {
+        int device_count = 0;
+        const bool no_cuda =
+            cudaGetDeviceCount(&device_count) != cudaSuccess || device_count == 0;
+        if (no_cuda) {
+            const Bf16GdnGatingProblem small35{32, 2048, 8}; // is_35, cols=8 <= 16
+            bool threw = false;
+            Bf16GdnNormGatingScheduleId sched = Bf16GdnNormGatingScheduleId::Composed;
+            try {
+                sched = bf16_gdn_norm_gating_resolve_plan(small35).schedule;
+            } catch (...) {
+                threw = true;
+            }
+            failures += check("35b norm-gating zero-SM does not throw", !threw, true);
+            failures += check("35b norm-gating zero-SM -> Composed fallback",
+                              sched == Bf16GdnNormGatingScheduleId::Composed, true);
+        }
+    }
 
     std::cout << (failures == 0 ? "OK" : "FAIL") << " gdn_gating_residency\n";
     return failures == 0 ? 0 : 1;
