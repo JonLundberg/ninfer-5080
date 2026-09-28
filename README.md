@@ -43,72 +43,29 @@ c4a7e9ab593a7f42d58208fa0065d67a82d61921107686cc9f6ed1ec6b050e21
 
 The same artifact SHA has been retained across the original text-only release, Vision enablement, the v1.2/v1.3 production runtime work, the v1.4 production release, and subsequent qualified runtime optimizations.
 
-## Validated runtime releases
+## Validated runtime release
 
-### v1.5 CUDA 13.4 / Blackwell production runtime
+### v1.5 — CUDA 13.4 / Blackwell production runtime
 
-v1.5 qualifies the RTX 5080 production path on **CUDA 13.4.92 / NVIDIA 615.71.09** and retunes the large-prefill Q3/A8 SwiGLU schedule for Blackwell/CC 12.0.
+v1.5 is the current RTX 5080 production release. It qualifies **CUDA 13.4.92 / NVIDIA 615.71.09**, retunes the Q3/A8 large-prefill SwiGLU path for Blackwell/CC 12.0, and standardizes whole-model performance reporting on `ninfer_bench`.
 
-The canonical performance source of truth is now `ninfer_bench` using the committed immutable 118,001-token ID fixture:
+Canonical 118K result on the committed immutable benchmark corpus:
 
-```text
-bench/fixtures/workflow-118k-v1/ninfer_bench_118001.ids
-SHA256=5b08da2c7b7ea5cafad2fab5699dccbcbce86040d8a37219b8c21f094d1d1eb7
-test=pp118001+tg2048
-warmup=1
-measured repetitions=2
-```
-
-Against the old production configuration on the exact same corpus and benchmark contract:
-
-| Metric | v1.4-style baseline | v1.5 | Change |
-|---|---:|---:|---:|
-| Prefill | 1,315.712 tok/s | **1,374.383 tok/s** | **+4.459%** |
-| Sustained decode | 109.666 tok/s | **112.215 tok/s** | **+2.324%** |
-| Prefill chunk | 896 | **1792** | — |
-| Q3 large-prefill schedule | 64/256/16/128 | **64/128/16/64** | — |
-
-The Q3 retune removes the CUDA 13.4 local-memory spill regression observed in the previous large-prefill schedule. The model artifact remains unchanged.
-
-See [the v1.5 release record](docs/RELEASE_QWEN3.8_27B_RTX5080_V1.5.md).
-
-### v1.4 production runtime
-
-The current production release is **v1.4**, published from:
-
-```text
-source commit:
-d5ee1bf130a45ce56f645dd44a6f1fa6f30c6a77
-
-source tree:
-35ef1538def9d4bd9dc0294c9364897cf1f4bce5
-
-ninfer SHA-256:
-38affd44afede11682500cba846d8a8b5c93cfe70259c73a72c1d5e3cef163bf
-
-ninfer-serve SHA-256:
-b936e179a06ad6b78b4fa4b3ae683efea928abf1888a6e2c3813fdeea9294a44
-```
-
-v1.4 preserves the full **131,072 context / 131,072 Q4 KV / MTP-3 / Vision-2048** profile and adds host-mapped token embeddings, enough recovered VRAM to run CUDA Graph decode as the recommended profile, constrained semantic decisions, a realistic mixed-workflow 118K benchmark, and CLI/serve Vision-planning parity.
-
-The validated RTX 5080 production profile keeps **795.70 MiB** of token embeddings host-resident and starts with **715.54 MiB planned slack** with CUDA Graph enabled.
-
-Canonical v1.4 benchmark on the 118,001-token mixed workflow:
-
-| Metric | Result |
+| Metric | v1.5 |
 |---|---:|
-| Prefill median | **1,361.76 tok/s** |
-| Sustained decode median | **96.97 tok/s** |
-| Sustained decode mean | **97.01 tok/s** |
-| MTP acceptance | **66.98%** |
-| MTP accepted length | **3.01 tok/round** |
+| Prefill | **1,374.383 tok/s** |
+| Sustained decode | **112.215 tok/s** |
+| Improvement | **+4.46% prefill / +2.32% decode** |
+| Context / KV capacity | **131,072 / 131,072** |
+| KV dtype | **Q4 group64** |
+| Prefill chunk | **1792** |
+| Speculation | **MTP-3** |
+| CUDA Graph | **enabled** |
+| Vision | **2048 tokens** |
 
-The decode result is based on 3 × 2,048 exact decoded tokens with model-default EOS suppressed only for benchmark measurement, matching the repository benchmark policy.
+The model artifact is unchanged. Full benchmark methodology, configuration and qualification evidence are documented in [Benchmarks](docs/BENCHMARKS.md) and the [v1.5 release record](docs/RELEASE_QWEN3.8_27B_RTX5080_V1.5.md).
 
-See [the full v1.4 release record](docs/RELEASE_QWEN3.8_27B_RTX5080_V1.4.md).
-
-Historical release records remain preserved in [v1.3](docs/RELEASE_QWEN3.8_27B_RTX5080_V1.3.md) and [v1.2](docs/RELEASE_QWEN3.8_27B_RTX5080_V1.2.md).
+Historical release records: [v1.4](docs/RELEASE_QWEN3.8_27B_RTX5080_V1.4.md), [v1.3](docs/RELEASE_QWEN3.8_27B_RTX5080_V1.3.md), [v1.2](docs/RELEASE_QWEN3.8_27B_RTX5080_V1.2.md).
 
 ## Recommended serving profile
 
@@ -135,51 +92,36 @@ The v1.5 RTX 5080 production profile uses full 128K context/KV, Vision 2048, hos
 
 CUDA Graph is enabled by default; the recommended v1.5 profile intentionally omits `--no-cuda-graph`.
 
-Validated startup envelope:
+Validated v1.5 production startup envelope:
 
 ```text
-embedding host-resident  795.70 MiB
 vision_encode             132.3142 MiB
-free after startup        794.56 MiB
-planned slack             715.54 MiB
+free after startup        885.94 MiB
+planned slack             806.92 MiB
 graph observed/allowance    2.00 / 82.00 MiB
 ```
 
-This replaces the pre-v1.4 recommendation to reduce Vision to 1792 for headroom. The 1792 and earlier 2048 measurements remain documented as historical validation points in [VISION_128K.md](docs/VISION_128K.md).
+Detailed memory and Vision qualification is documented in [VISION_128K.md](docs/VISION_128K.md) and [MEMORY_PROFILE.md](docs/MEMORY_PROFILE.md).
 
-## Long-context validation
+## Long-context benchmark
 
-The canonical forward-looking benchmark is now the deterministic **workflow-118k-v1** mixed engineering-agent fixture:
+Whole-model performance is reported with `ninfer_bench` against the committed immutable 118,001-token ID corpus:
 
 ```text
-bench/fixtures/workflow-118k-v1/qwen38_118001_workflow_candidate.txt
-SHA256=cb7c131bd20d78bd69396c019f988c81fad1941a853a8de7da7586e1aeb99718
-prepared tokens=118001
+bench/fixtures/workflow-118k-v1/ninfer_bench_118001.ids
+SHA256=5b08da2c7b7ea5cafad2fab5699dccbcbce86040d8a37219b8c21f094d1d1eb7
+test=pp118001+tg2048
+warmup=1
+measured repetitions=2
 ```
 
-The fixture mixes prose, source code, shell transcripts, configuration, JSON, tool-call history, runtime logs and engineering discussion. The older repetitive 118K corpus is retained only as historical evidence.
+Current v1.5 result:
 
-v1.4 canonical Graph-ON result:
+- **1,374.383 tok/s prefill**
+- **112.215 tok/s sustained decode**
+- **+4.46% prefill / +2.32% decode** versus the previous production configuration under the same benchmark contract
 
-| Metric | Result |
-|---|---:|
-| Prompt tokens | 118,001 |
-| Max context | 131,072 |
-| KV capacity | 131,072 |
-| KV dtype | Q4 group64 |
-| Prefill chunk | 896 |
-| Speculation | MTP-3 |
-| CUDA Graph | enabled |
-| Host-mapped embeddings | enabled |
-| Vision profile | 2048 |
-| Prefill median | **1,361.76 tok/s** |
-| Decode median | **96.97 tok/s** |
-| Decode range | **96.97–97.08 tok/s** |
-| MTP acceptance | **66.98%** |
-| Acceptance length | **3.01 tok/round** |
-| Planned slack | **715.54 MiB** |
-
-A result is described here as **true 128K** only when both configured context and allocated KV capacity are actually `131072`.
+See [BENCHMARKS.md](docs/BENCHMARKS.md) for the full methodology, run data, memory envelope and engineering evidence.
 
 ## Multimodal validation
 
@@ -230,13 +172,11 @@ That means build automation can evolve without weakening the artifact identity c
 
 Start with:
 
-- [v1.5 release](docs/RELEASE_QWEN3.8_27B_RTX5080_V1.5.md) — current CUDA 13.4 / Blackwell production release record
-- [v1.4 release](docs/RELEASE_QWEN3.8_27B_RTX5080_V1.4.md) — historical production release record
-- [v1.3 release](docs/RELEASE_QWEN3.8_27B_RTX5080_V1.3.md) — historical production release record
+- [v1.5 release](docs/RELEASE_QWEN3.8_27B_RTX5080_V1.5.md) — current production release
+- [Benchmarks](docs/BENCHMARKS.md) — canonical benchmark methodology and detailed results
 - [Validated manifest](docs/VALIDATED_MANIFEST.md) — exact source, binary and model identities
 - [Vision 128K](docs/VISION_128K.md) — Vision profiles, memory envelope and validation
 - [Reproducibility](docs/REPRODUCIBILITY.md) — build and runtime reproduction
-- [Benchmarks](docs/BENCHMARKS.md) — long-context and multimodal results
 - [Memory profile](docs/MEMORY_PROFILE.md) — how the 16 GB fit is achieved
 - [Upstream sync status](docs/UPSTREAM_SYNC_STATUS.md) — selective semantic-port ledger and review policy
 - [Constrained decisions](docs/CONSTRAINED_DECISIONS_USAGE.md) — current C++ finite-decision API, multi-token tries, dependencies and backend limits
