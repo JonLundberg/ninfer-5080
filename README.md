@@ -1,5 +1,10 @@
 # NInfer RTX 5080 — Qwen3.8-27B at true 128K + Vision on 16 GB
 
+> **This fork's `windows-port` branch** adds a native Windows (MSVC) text-only build, measured on an RTX 5070 Ti.
+> See [WINDOWS.md](WINDOWS.md). Built on [Neroued/ninfer](https://github.com/Neroued/ninfer),
+> [ruwwww/ninfer-5060ti](https://github.com/ruwwww/ninfer-5060ti) and
+> [toddballinger/ninfer-5080](https://github.com/toddballinger/ninfer-5080); the rest of this README is upstream's.
+
 This fork documents and maintains a validated **Qwen3.8-27B** configuration for a single **NVIDIA RTX 5080 16 GB** with a genuine **131,072-token context and KV capacity**, Q4 KV, MTP-3 speculative decoding, and Vision support.
 
 The project separates three things deliberately:
