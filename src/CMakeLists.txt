@@ -48,9 +48,15 @@ target_link_libraries(ninfer_artifact PUBLIC ninfer_core)
 # producer warpgroup to its consumer warpgroups. Relocatable device code makes ptxas
 # discard that contract, so this self-contained kernel is intentionally compiled in a
 # non-RDC archive and called through a host launcher from ninfer_ops.
-add_library(ninfer_nvfp4_tma STATIC
-  ops/linear/nvfp4/nvfp4_w4a4_tma.cu
-  ops/linear_swiglu/nvfp4/nvfp4_linear_swiglu_w4a4_tma.cu)
+if(MSVC)
+  # MSVC host launch stubs cannot pass 128-byte-aligned CUtensorMap parameters by value.
+  add_library(ninfer_nvfp4_tma STATIC
+    ops/linear/nvfp4/nvfp4_tma_unsupported.cpp)
+else()
+  add_library(ninfer_nvfp4_tma STATIC
+    ops/linear/nvfp4/nvfp4_w4a4_tma.cu
+    ops/linear_swiglu/nvfp4/nvfp4_linear_swiglu_w4a4_tma.cu)
+endif()
 ninfer_internal_includes(ninfer_nvfp4_tma)
 set_target_properties(ninfer_nvfp4_tma PROPERTIES
   CUDA_SEPARABLE_COMPILATION OFF
@@ -311,17 +317,27 @@ add_library(ninfer_text STATIC
   ${PROJECT_SOURCE_DIR}/third_party/utf8proc/utf8proc.c)
 ninfer_internal_includes(ninfer_text)
 
-add_library(ninfer_media_decode STATIC
-  media/decode/decode.cpp)
+if(NINFER_ENABLE_MEDIA)
+  add_library(ninfer_media_decode STATIC
+    media/decode/decode.cpp)
+  target_link_libraries(ninfer_media_decode PRIVATE PkgConfig::FFMPEG)
+else()
+  add_library(ninfer_media_decode STATIC
+    media/decode/decode_disabled.cpp)
+endif()
 ninfer_internal_includes(ninfer_media_decode)
-target_link_libraries(ninfer_media_decode PRIVATE PkgConfig::FFMPEG)
 
 if(NINFER_BUILD_MEDIA_ACQUIRE)
   # Product-only path/data/HTTP acquisition. No target package links this library.
-  add_library(ninfer_media_acquire STATIC
-    product/media_acquire/acquire.cpp)
+  if(NINFER_ENABLE_MEDIA)
+    add_library(ninfer_media_acquire STATIC
+      product/media_acquire/acquire.cpp)
+    target_link_libraries(ninfer_media_acquire PRIVATE PkgConfig::LIBCURL)
+  else()
+    add_library(ninfer_media_acquire STATIC
+      product/media_acquire/acquire_disabled.cpp)
+  endif()
   ninfer_internal_includes(ninfer_media_acquire)
-  target_link_libraries(ninfer_media_acquire PRIVATE PkgConfig::LIBCURL)
 endif()
 
 if(NINFER_BUILD_PROMPT_INPUT)

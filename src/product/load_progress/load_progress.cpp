@@ -1,6 +1,11 @@
 #include "product/load_progress/load_progress.h"
 
+#if defined(_WIN32)
+#include <io.h>
+#include <stdio.h>
+#else
 #include <unistd.h>
+#endif
 
 #include <algorithm>
 #include <array>
@@ -60,7 +65,11 @@ std::string format_line(std::string_view phase, std::uint64_t done, std::uint64_
 } // namespace
 
 LoadProgressRendererOptions stderr_load_progress_options() noexcept {
+#if defined(_WIN32)
+    if (::_isatty(::_fileno(stderr)) != 0) {
+#else
     if (::isatty(STDERR_FILENO) == 1) {
+#endif
         return LoadProgressRendererOptions{
             .mode                 = LoadProgressOutputMode::Interactive,
             .min_refresh_interval = std::chrono::milliseconds(200),

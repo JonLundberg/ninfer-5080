@@ -16,6 +16,14 @@
 
 #include <cstdint>
 
+// nvcc with an MSVC host compiler does not provide __builtin_memcpy in device code.
+#if defined(_MSC_VER)
+#include <cstring>
+#define NINFER_KV_MEMCPY memcpy
+#else
+#define NINFER_KV_MEMCPY __builtin_memcpy
+#endif
+
 namespace ninfer::ops {
 
 inline constexpr int kGqaKvQuantHeadDim = 256;
@@ -167,7 +175,7 @@ __device__ __forceinline__ int4 gqa_kv_dequant_i8x8_from(const std::int8_t* code
 // Dequantize 8 consecutive signed INT4 codes from 4 packed bytes.
 __device__ __forceinline__ int4 gqa_kv_dequant_q4x8_from(const std::uint8_t* codes4, float s) {
     std::uint32_t raw = 0;
-    __builtin_memcpy(&raw, codes4, sizeof(raw));
+    NINFER_KV_MEMCPY(&raw, codes4, sizeof(raw));
 
     unsigned values[4];
 #pragma unroll
@@ -188,7 +196,7 @@ __device__ __forceinline__ int4 gqa_kv_dequant_q2x8_from(
     const std::uint8_t* codes2, float scale) {
 
     std::uint16_t raw = 0;
-    __builtin_memcpy(&raw, codes2, sizeof(raw));
+    NINFER_KV_MEMCPY(&raw, codes2, sizeof(raw));
 
     unsigned values[4];
 

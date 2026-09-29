@@ -17,8 +17,14 @@ SequencePlan<Variant>::SequencePlan(
     std::unique_ptr<detail::SequencePlanImpl<Variant>> impl) noexcept
     : impl_(std::move(impl)) {}
 
+#if defined(_MSC_VER)
+// MSVC does not emit an out-of-line definition for a defaulted explicit specialization.
+template <>
+SequencePlan<Variant>::SequencePlan(SequencePlan&& other) noexcept : impl_(std::move(other.impl_)) {}
+#else
 template <>
 SequencePlan<Variant>::SequencePlan(SequencePlan&&) noexcept = default;
+#endif
 template <>
 SequencePlan<Variant>& SequencePlan<Variant>::operator=(SequencePlan&&) noexcept = default;
 template <>
@@ -84,8 +90,14 @@ RequestBasePlan<Variant>::RequestBasePlan(
     std::unique_ptr<detail::RequestBasePlanImpl<Variant>> impl) noexcept
     : impl_(std::move(impl)) {}
 
+#if defined(_MSC_VER)
+// MSVC does not emit an out-of-line definition for a defaulted explicit specialization.
+template <>
+RequestBasePlan<Variant>::RequestBasePlan(RequestBasePlan&& other) noexcept : impl_(std::move(other.impl_)) {}
+#else
 template <>
 RequestBasePlan<Variant>::RequestBasePlan(RequestBasePlan&&) noexcept = default;
+#endif
 template <>
 RequestBasePlan<Variant>& RequestBasePlan<Variant>::operator=(RequestBasePlan&&) noexcept = default;
 template <>
@@ -101,8 +113,14 @@ template <>
 RequestPlan<Variant>::RequestPlan(std::unique_ptr<detail::RequestPlanImpl<Variant>> impl) noexcept
     : impl_(std::move(impl)) {}
 
+#if defined(_MSC_VER)
+// MSVC does not emit an out-of-line definition for a defaulted explicit specialization.
+template <>
+RequestPlan<Variant>::RequestPlan(RequestPlan&& other) noexcept : impl_(std::move(other.impl_)) {}
+#else
 template <>
 RequestPlan<Variant>::RequestPlan(RequestPlan&&) noexcept = default;
+#endif
 template <>
 RequestPlan<Variant>& RequestPlan<Variant>::operator=(RequestPlan&&) noexcept = default;
 template <>

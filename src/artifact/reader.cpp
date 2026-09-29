@@ -15,10 +15,14 @@
 #include <unordered_map>
 #include <utility>
 
+#if defined(_WIN32)
+#include <windows.h>
+#else
 #include <fcntl.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#endif
 
 namespace ninfer::artifact {
 namespace {
@@ -179,6 +183,101 @@ struct TransparentStringHash {
     }
 };
 
+#if defined(_WIN32)
+// Windows equivalent of the POSIX MappedFile below: a read-only view for metadata and a separate
+// FILE_FLAG_NO_BUFFERING handle for the aligned direct reads.
+class MappedFile {
+public:
+    explicit MappedFile(const std::filesystem::path& path) {
+        file_ = ::CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                              FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (file_ == INVALID_HANDLE_VALUE) { fail("open " + path.string()); }
+
+        LARGE_INTEGER status{};
+        if (::GetFileSizeEx(file_, &status) == 0) { fail("stat " + path.string()); }
+        if (status.QuadPart < 0 ||
+            static_cast<std::uint64_t>(status.QuadPart) > std::numeric_limits<std::size_t>::max()) {
+            close();
+            throw ArtifactError("artifact size does not fit the process address space");
+        }
+        size_ = static_cast<std::size_t>(status.QuadPart);
+
+        if (size_ != 0) {
+            mapping_ = ::CreateFileMappingW(file_, nullptr, PAGE_READONLY, 0, 0, nullptr);
+            if (mapping_ == nullptr) { fail("mmap " + path.string()); }
+            data_ = static_cast<const std::byte*>(::MapViewOfFile(mapping_, FILE_MAP_READ, 0, 0, 0));
+            if (data_ == nullptr) { fail("mmap " + path.string()); }
+        }
+
+        direct_ = ::CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING,
+                                FILE_FLAG_NO_BUFFERING, nullptr);
+        if (direct_ == INVALID_HANDLE_VALUE) { fail("open direct " + path.string()); }
+    }
+
+    ~MappedFile() { close(); }
+
+    MappedFile(const MappedFile&)            = delete;
+    MappedFile& operator=(const MappedFile&) = delete;
+
+    const std::byte* data() const noexcept { return data_; }
+
+    std::size_t size() const noexcept { return size_; }
+
+    std::size_t read_direct(std::uint64_t absolute_offset, std::span<std::byte> destination) const {
+        constexpr std::size_t alignment = Reader::direct_io_alignment;
+        if (absolute_offset % alignment != 0 || destination.size() % alignment != 0 ||
+            reinterpret_cast<std::uintptr_t>(destination.data()) % alignment != 0) {
+            throw ArtifactError("direct artifact read is not 4096-byte aligned");
+        }
+
+        // ReadFile takes a 32-bit length; split into aligned chunks and stop at end of file.
+        constexpr std::size_t kMaxChunk = std::size_t{1} << 30;
+        std::size_t total = 0;
+        while (total < destination.size()) {
+            const std::size_t request = std::min(kMaxChunk, destination.size() - total);
+            const std::uint64_t offset = absolute_offset + total;
+            OVERLAPPED overlapped{};
+            overlapped.Offset     = static_cast<DWORD>(offset & 0xffffffffULL);
+            overlapped.OffsetHigh = static_cast<DWORD>(offset >> 32);
+            DWORD bytes           = 0;
+            if (::ReadFile(direct_, destination.data() + total, static_cast<DWORD>(request), &bytes,
+                           &overlapped) == 0) {
+                const DWORD error = ::GetLastError();
+                if (error == ERROR_HANDLE_EOF) { break; }
+                throw std::system_error(static_cast<int>(error), std::system_category(),
+                                        "direct artifact read");
+            }
+            total += bytes;
+            if (bytes < request) { break; }
+        }
+        return total;
+    }
+
+private:
+    [[noreturn]] void fail(const std::string& what) {
+        const DWORD error = ::GetLastError();
+        close();
+        throw std::system_error(static_cast<int>(error), std::system_category(), what);
+    }
+
+    void close() noexcept {
+        if (data_ != nullptr) { ::UnmapViewOfFile(data_); }
+        if (mapping_ != nullptr) { ::CloseHandle(mapping_); }
+        if (file_ != INVALID_HANDLE_VALUE) { ::CloseHandle(file_); }
+        if (direct_ != INVALID_HANDLE_VALUE) { ::CloseHandle(direct_); }
+        data_    = nullptr;
+        mapping_ = nullptr;
+        file_    = INVALID_HANDLE_VALUE;
+        direct_  = INVALID_HANDLE_VALUE;
+    }
+
+    HANDLE file_           = INVALID_HANDLE_VALUE;
+    HANDLE mapping_        = nullptr;
+    HANDLE direct_         = INVALID_HANDLE_VALUE;
+    const std::byte* data_ = nullptr;
+    std::size_t size_      = 0;
+};
+#else
 class MappedFile {
 public:
     explicit MappedFile(const std::filesystem::path& path) {
@@ -254,6 +353,7 @@ private:
     const std::byte* data_ = nullptr;
     std::size_t size_      = 0;
 };
+#endif
 
 } // namespace
 
