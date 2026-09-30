@@ -434,298 +434,6 @@ void q3_linear_swiglu_gemv_pair_launch(
 // Each warp owns one gate/up row pair. The packed Q3 weight pair is decoded
 // once and reused across all active tokens, which is especially useful for
 // MTP verification batches.
-template <int ActiveTokens>
-__global__ void q3_linear_swiglu_small_t_pair_kernel(
-    const __nv_bfloat16* __restrict__ x,
-    const std::uint8_t* __restrict__ codes,
-    const std::uint8_t* __restrict__ scales,
-    __nv_bfloat16* __restrict__ out) {
-
-    static_assert(ActiveTokens >= 2 && ActiveTokens <= 32);
-
-    constexpr int kTiles = kGroups / kGroupsPerWarpTileFast;
-    static_assert(kGroups % kGroupsPerWarpTileFast == 0);
-    static_assert(kIntermediate % kPairsPerBlockFast == 0);
-
-    constexpr int kStages =
-        ActiveTokens == 4 ? 2 : 3;
-    constexpr int kPrefetch = kStages - 1;
-
-    // Q3_SMALL_T_DIRECT_X
-    //
-    // Do NOT materialize all ActiveTokens x 5120 BF16 activations in
-    // shared memory. At T=4 that consumed ~40 KiB/block and limited
-    // occupancy to one CTA per SM. The activation footprint is tiny
-    // relative to the model weights, so read it through L1/L2 instead.
-    __shared__ uint4
-        code_tile[kWarpsPerBlockFast]
-                 [kStages]
-                 [2]
-                 [kVecsPerWarpTileFast];
-
-    __shared__ uint4
-        scale_tile[kWarpsPerBlockFast]
-                  [kStages]
-                  [2]
-                  [2];
-
-    const int lane =
-        static_cast<int>(threadIdx.x) & 31;
-
-    const int warp =
-        static_cast<int>(threadIdx.x) >> 5;
-
-    const int out_row =
-        static_cast<int>(blockIdx.x)
-            * kPairsPerBlockFast
-        + warp;
-
-    const std::int64_t gate_row = out_row;
-    const std::int64_t up_row =
-        out_row + kIntermediate;
-
-    const std::uint8_t* gate_code_row =
-        codes
-        + gate_row * kGroups * kBytesPerGroup;
-
-    const std::uint8_t* up_code_row =
-        codes
-        + up_row * kGroups * kBytesPerGroup;
-
-    const std::uint8_t* gate_scale_row =
-        scales
-        + gate_row * kGroups * 2;
-
-    const std::uint8_t* up_scale_row =
-        scales
-        + up_row * kGroups * 2;
-
-    float gate_acc[ActiveTokens] = {};
-    float up_acc[ActiveTokens]   = {};
-
-#pragma unroll
-    for (int pfetch = 0;
-         pfetch < kPrefetch;
-         ++pfetch) {
-
-        if (pfetch < kTiles) {
-            q3_issue_pair_tile(
-                code_tile[warp][pfetch],
-                scale_tile[warp][pfetch],
-                gate_code_row,
-                gate_scale_row,
-                up_code_row,
-                up_scale_row,
-                pfetch,
-                lane);
-        } else {
-            pipe_commit();
-        }
-    }
-
-#pragma unroll 1
-    for (int tile = 0;
-         tile < kTiles;
-         ++tile) {
-
-        const int fetch =
-            tile + kPrefetch;
-
-        if (fetch < kTiles) {
-            const int buf =
-                fetch % kStages;
-
-            q3_issue_pair_tile(
-                code_tile[warp][buf],
-                scale_tile[warp][buf],
-                gate_code_row,
-                gate_scale_row,
-                up_code_row,
-                up_scale_row,
-                fetch,
-                lane);
-        } else {
-            pipe_commit();
-        }
-
-        pipe_wait<kPrefetch>();
-        __syncwarp();
-
-        const int buf =
-            tile % kStages;
-
-        const auto* gate_codes =
-            reinterpret_cast<const std::uint8_t*>(
-                code_tile[warp][buf][0]);
-
-        const auto* up_codes =
-            reinterpret_cast<const std::uint8_t*>(
-                code_tile[warp][buf][1]);
-
-        const auto* gate_scales =
-            reinterpret_cast<const std::uint16_t*>(
-                scale_tile[warp][buf][0]);
-
-        const auto* up_scales =
-            reinterpret_cast<const std::uint16_t*>(
-                scale_tile[warp][buf][1]);
-
-#pragma unroll
-        for (int tile_group = 0;
-             tile_group < kGroupsPerWarpTileFast;
-             ++tile_group) {
-
-            const float gate_scale =
-                __half2float(
-                    __ushort_as_half(
-                        gate_scales[tile_group]));
-
-            const float up_scale =
-                __half2float(
-                    __ushort_as_half(
-                        up_scales[tile_group]));
-
-            int gq0, gq1;
-            int uq0, uq1;
-
-            q3_decode_lane_pair(
-                gate_codes
-                    + tile_group * kBytesPerGroup,
-                lane,
-                gq0,
-                gq1);
-
-            q3_decode_lane_pair(
-                up_codes
-                    + tile_group * kBytesPerGroup,
-                lane,
-                uq0,
-                uq1);
-
-            const int k0 =
-                (tile * kGroupsPerWarpTileFast
-                 + tile_group)
-                    * kGroupK
-                + lane * 2;
-
-            // Q3_SMALL_T_XLOAD_BATCH
-            //
-            // Issue all independent activation loads before consuming any
-            // of them. This increases the LDG -> use distance and gives the
-            // scheduler useful independent memory operations while earlier
-            // loads are waiting on L1TEX.
-            float2 xv[ActiveTokens];
-
-#pragma unroll
-            for (int token = 0;
-                 token < ActiveTokens;
-                 ++token) {
-
-                const auto* x2 =
-                    reinterpret_cast<
-                        const __nv_bfloat162*>(
-                        x + static_cast<std::int64_t>(token) * kK);
-
-                xv[token] =
-                    __bfloat1622float2(
-                        x2[k0 >> 1]);
-            }
-
-#pragma unroll
-            for (int token = 0;
-                 token < ActiveTokens;
-                 ++token) {
-
-                gate_acc[token] =
-                    fmaf(
-                        static_cast<float>(gq0)
-                            * gate_scale,
-                        xv[token].x,
-                        gate_acc[token]);
-
-                gate_acc[token] =
-                    fmaf(
-                        static_cast<float>(gq1)
-                            * gate_scale,
-                        xv[token].y,
-                        gate_acc[token]);
-
-                up_acc[token] =
-                    fmaf(
-                        static_cast<float>(uq0)
-                            * up_scale,
-                        xv[token].x,
-                        up_acc[token]);
-
-                up_acc[token] =
-                    fmaf(
-                        static_cast<float>(uq1)
-                            * up_scale,
-                        xv[token].y,
-                        up_acc[token]);
-            }
-        }
-
-        __syncwarp();
-    }
-
-#pragma unroll
-    for (int token = 0;
-         token < ActiveTokens;
-         ++token) {
-
-        gate_acc[token] =
-            warp_reduce_sum(gate_acc[token]);
-
-        up_acc[token] =
-            warp_reduce_sum(up_acc[token]);
-    }
-
-    if (lane == 0) {
-#pragma unroll
-        for (int token = 0;
-             token < ActiveTokens;
-             ++token) {
-
-            out[
-                static_cast<std::int64_t>(token)
-                    * kIntermediate
-                + out_row] =
-                __float2bfloat16_rn(
-                    silu(gate_acc[token])
-                    * up_acc[token]);
-        }
-    }
-}
-
-
-template <int ActiveTokens>
-void q3_linear_swiglu_small_t_pair_launch(
-    const Tensor& x,
-    const Weight& w,
-    Tensor& out,
-    cudaStream_t stream) {
-
-    const int grid =
-        kIntermediate / kPairsPerBlockFast;
-
-    q3_linear_swiglu_small_t_pair_kernel<ActiveTokens>
-        <<<grid, kBlockThreadsFast, 0, stream>>>(
-            static_cast<
-                const __nv_bfloat16*>(x.data),
-            static_cast<
-                const std::uint8_t*>(w.qdata),
-            static_cast<
-                const std::uint8_t*>(w.scales),
-            static_cast<
-                __nv_bfloat16*>(out.data));
-
-    CUDA_CHECK(cudaGetLastError());
-}
-
-
-
-
 // -----------------------------------------------------------------------------
 // Q3 exact small-T BF16 Tensor-Core POC.
 //
@@ -798,65 +506,18 @@ struct Q3SwiGluSmallTEpilogue {
 
 
 
-void q3_linear_swiglu_t2_mma_launch(
+// One weight pass serves every T=2..16: 8-column MMA tiles up to T=8, 16-column tiles above.
+template <int ActiveCols>
+void q3_linear_swiglu_small_t_mma_launch(
     const Tensor& x,
     const Weight& w,
     Tensor& out,
     cudaStream_t stream) {
 
-    if (x.ne[1] != 2) {
-        throw std::invalid_argument(
-            "Q3 T2 MMA requires exactly 2 tokens");
-    }
-
-    constexpr int kTileCols = 8;
-    constexpr int kActiveCols = 2;
-
-    constexpr int kBlocks =
-        kIntermediate
-        / Q3SwiGluSmallTRows::kOutputRowsPerCta;
-
-    const Q3SwiGluSmallTEpilogue epilogue{
-        static_cast<__nv_bfloat16*>(out.data)
-    };
-
-    q3_small_t_mma_kernel<
-        Q3SwiGluSmallTGeometry,
-        kTileCols,
-        kActiveCols,
-        Q3SwiGluSmallTEpilogue,
-        Q3SwiGluSmallTRows>
-        <<<kBlocks,
-           Q3SmallTMmaSchedule::kThreads,
-           0,
-           stream>>>(
-            static_cast<const __nv_bfloat16*>(x.data),
-            static_cast<const std::uint8_t*>(w.qdata),
-            static_cast<const std::uint8_t*>(w.scales),
-            static_cast<__nv_bfloat16*>(out.data),
-            epilogue,
-            Q3SwiGluSmallTRows{});
-
-    CUDA_CHECK(cudaGetLastError());
-}
-
-
-void q3_linear_swiglu_t4_mma_launch(
-    const Tensor& x,
-    const Weight& w,
-    Tensor& out,
-    cudaStream_t stream) {
-
-    if (x.ne[1] != 4) {
-        throw std::invalid_argument(
-            "Q3 T4 MMA POC requires exactly 4 tokens");
-    }
+    static_assert(ActiveCols >= 2 && ActiveCols <= 16);
 
     constexpr int kTileCols =
-        8;
-
-    constexpr int kActiveCols =
-        4;
+        ActiveCols <= 8 ? 8 : 16;
 
     constexpr int kBlocks =
         kIntermediate
@@ -869,7 +530,7 @@ void q3_linear_swiglu_t4_mma_launch(
     q3_small_t_mma_kernel<
         Q3SwiGluSmallTGeometry,
         kTileCols,
-        kActiveCols,
+        ActiveCols,
         Q3SwiGluSmallTEpilogue,
         Q3SwiGluSmallTRows>
         <<<kBlocks,
@@ -888,6 +549,34 @@ void q3_linear_swiglu_t4_mma_launch(
             Q3SwiGluSmallTRows{});
 
     CUDA_CHECK(cudaGetLastError());
+}
+
+void q3_linear_swiglu_small_t_mma_dispatch(
+    const Tensor& x,
+    const Weight& w,
+    Tensor& out,
+    cudaStream_t stream) {
+
+    switch (x.ne[1]) {
+    case 2:  q3_linear_swiglu_small_t_mma_launch<2>(x, w, out, stream);  return;
+    case 3:  q3_linear_swiglu_small_t_mma_launch<3>(x, w, out, stream);  return;
+    case 4:  q3_linear_swiglu_small_t_mma_launch<4>(x, w, out, stream);  return;
+    case 5:  q3_linear_swiglu_small_t_mma_launch<5>(x, w, out, stream);  return;
+    case 6:  q3_linear_swiglu_small_t_mma_launch<6>(x, w, out, stream);  return;
+    case 7:  q3_linear_swiglu_small_t_mma_launch<7>(x, w, out, stream);  return;
+    case 8:  q3_linear_swiglu_small_t_mma_launch<8>(x, w, out, stream);  return;
+    case 9:  q3_linear_swiglu_small_t_mma_launch<9>(x, w, out, stream);  return;
+    case 10: q3_linear_swiglu_small_t_mma_launch<10>(x, w, out, stream); return;
+    case 11: q3_linear_swiglu_small_t_mma_launch<11>(x, w, out, stream); return;
+    case 12: q3_linear_swiglu_small_t_mma_launch<12>(x, w, out, stream); return;
+    case 13: q3_linear_swiglu_small_t_mma_launch<13>(x, w, out, stream); return;
+    case 14: q3_linear_swiglu_small_t_mma_launch<14>(x, w, out, stream); return;
+    case 15: q3_linear_swiglu_small_t_mma_launch<15>(x, w, out, stream); return;
+    case 16: q3_linear_swiglu_small_t_mma_launch<16>(x, w, out, stream); return;
+    default:
+        throw std::invalid_argument(
+            "Q3 small-T MMA requires 2..16 tokens");
+    }
 }
 
 
@@ -1760,27 +1449,14 @@ void q3_linear_swiglu_dispatch(
         ++q3_calls_t257_plus;
     }
 
-    // Fast decode path. Keep original known-correct implementation
-    // unchanged for T >= 2.
+    // T=1 GEMV; T=2..16 (MTP verify widths) take one small-T MMA weight pass.
     if (tokens == 1) {
         q3_linear_swiglu_gemv_pair_launch(x, w, out, stream);
         return;
     }
 
-    if (tokens == 2) {
-        q3_linear_swiglu_t2_mma_launch(
-            x, w, out, stream);
-        return;
-    }
-
-    if (tokens == 3) {
-        q3_linear_swiglu_small_t_pair_launch<3>(
-            x, w, out, stream);
-        return;
-    }
-
-    if (tokens == 4) {
-        q3_linear_swiglu_t4_mma_launch(
+    if (tokens <= 16) {
+        q3_linear_swiglu_small_t_mma_dispatch(
             x, w, out, stream);
         return;
     }
@@ -1818,12 +1494,8 @@ void q3_linear_swiglu_dispatch(
         return;
     }
 
-    // Large-T prefill path.
-    //
-    // Reuse the proven T=4 pair kernel across token tiles instead of the
-    // generic [row, token] kernel.  The T=4 kernel decodes each Q3 weight
-    // tile once and reuses it across four activation rows, avoiding the
-    // catastrophic per-token weight rereads of q3_linear_swiglu_kernel.
+    // Large-T A16 prefill path: 32-token MMA tiles, then one small-T MMA
+    // (or GEMV) pass for the tail.
     const auto* x_base =
         static_cast<const __nv_bfloat16*>(x.data);
 
@@ -1853,70 +1525,6 @@ void q3_linear_swiglu_dispatch(
             x_tile, w, out_tile, stream);
     }
 
-    if (token + 16 <= tokens) {
-        Tensor x_tile = x;
-        Tensor out_tile = out;
-
-        x_tile.data = const_cast<__nv_bfloat16*>(
-            x_base
-            + static_cast<std::int64_t>(token) * kK);
-
-        out_tile.data =
-            out_base
-            + static_cast<std::int64_t>(token) * kIntermediate;
-
-        x_tile.ne[1] = 16;
-        out_tile.ne[1] = 16;
-
-        q3_linear_swiglu_small_t_pair_launch<16>(
-            x_tile, w, out_tile, stream);
-
-        token += 16;
-    }
-
-    if (token + 8 <= tokens) {
-        Tensor x_tile = x;
-        Tensor out_tile = out;
-
-        x_tile.data = const_cast<__nv_bfloat16*>(
-            x_base
-            + static_cast<std::int64_t>(token) * kK);
-
-        out_tile.data =
-            out_base
-            + static_cast<std::int64_t>(token) * kIntermediate;
-
-        x_tile.ne[1] = 8;
-        out_tile.ne[1] = 8;
-
-        q3_linear_swiglu_small_t_pair_launch<8>(
-            x_tile, w, out_tile, stream);
-
-        token += 8;
-    }
-
-    // Handle a possible four-token tail with the existing proven T4 path.
-    if (token + 4 <= tokens) {
-        Tensor x_tile = x;
-        Tensor out_tile = out;
-
-        x_tile.data = const_cast<__nv_bfloat16*>(
-            x_base
-            + static_cast<std::int64_t>(token) * kK);
-
-        out_tile.data =
-            out_base
-            + static_cast<std::int64_t>(token) * kIntermediate;
-
-        x_tile.ne[1] = 4;
-        out_tile.ne[1] = 4;
-
-        q3_linear_swiglu_small_t_pair_launch<4>(
-            x_tile, w, out_tile, stream);
-
-        token += 4;
-    }
-
     const int remainder = tokens - token;
 
     if (remainder != 0) {
@@ -1937,12 +1545,33 @@ void q3_linear_swiglu_dispatch(
         if (remainder == 1) {
             q3_linear_swiglu_gemv_pair_launch(
                 x_tail, w, out_tail, stream);
-        } else if (remainder == 2) {
-            q3_linear_swiglu_small_t_pair_launch<2>(
+        } else if (remainder <= 16) {
+            q3_linear_swiglu_small_t_mma_dispatch(
                 x_tail, w, out_tail, stream);
         } else {
-            q3_linear_swiglu_small_t_pair_launch<3>(
+            // 17..31 tokens: one 16-column pass plus the rest.
+            Tensor x_rest = x_tail;
+            Tensor out_rest = out_tail;
+            x_tail.ne[1] = 16;
+            out_tail.ne[1] = 16;
+            q3_linear_swiglu_small_t_mma_dispatch(
                 x_tail, w, out_tail, stream);
+
+            x_rest.data = const_cast<__nv_bfloat16*>(
+                x_base
+                + static_cast<std::int64_t>(token + 16) * kK);
+            out_rest.data =
+                out_base
+                + static_cast<std::int64_t>(token + 16) * kIntermediate;
+            x_rest.ne[1] = remainder - 16;
+            out_rest.ne[1] = remainder - 16;
+            if (remainder == 17) {
+                q3_linear_swiglu_gemv_pair_launch(
+                    x_rest, w, out_rest, stream);
+            } else {
+                q3_linear_swiglu_small_t_mma_dispatch(
+                    x_rest, w, out_rest, stream);
+            }
         }
     }
 }

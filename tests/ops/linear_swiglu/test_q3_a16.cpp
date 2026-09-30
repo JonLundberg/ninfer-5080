@@ -9,8 +9,10 @@ int main() {
     using namespace ninfer::test::linear_swiglu;
 
     try {
-        constexpr std::array<std::int32_t, 1> kTokenCases{
-            4,
+        // Covers the T=1 GEMV, every small-T MMA width (8- and 16-column tiles), and
+        // 32-token-tile prefill with each tail route (small-T MMA, 16 + GEMV, 16 + MMA).
+        constexpr std::array<std::int32_t, 20> kTokenCases{
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 37, 48, 49, 50,
         };
 
         const int failures = run_profile(
