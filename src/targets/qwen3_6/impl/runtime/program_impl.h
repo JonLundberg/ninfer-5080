@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cstdio>
 #include <cstring>
 #include <limits>
 #include <stdexcept>
@@ -2691,9 +2692,19 @@ void ProgramImplCore::prepare_graphs() {
     const std::size_t consumed = free_before > free_after ? free_before - free_after : 0;
     graph_observed_bytes       = consumed;
     if (consumed > graph_allowance_bytes) {
+#ifdef _WIN32
+        // Under WDDM cudaMemGetInfo reports a per-process budget that moves with other processes'
+        // VRAM use, so this delta is not attributable to graph preparation alone. Report instead
+        // of failing startup; host spill is detected through the WDDM GPU memory counters.
+        std::fprintf(stderr,
+                     "warning: CUDA Graph preparation budget delta %zu bytes exceeds the planned "
+                     "allowance of %zu bytes (WDDM budget includes other processes)\n",
+                     consumed, graph_allowance_bytes);
+#else
         throw std::runtime_error("CUDA Graph preparation consumed " + std::to_string(consumed) +
                                  " bytes, exceeding the planned allowance of " +
                                  std::to_string(graph_allowance_bytes) + " bytes");
+#endif
     }
     for (PagedKVAllocation& allocation : dflash_capture_allocations) { allocation.unbind_row(); }
     dflash_capture_allocations.clear();
